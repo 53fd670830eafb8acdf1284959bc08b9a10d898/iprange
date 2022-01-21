@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+from sys import stderr
+from optparse import OptionParser, OptionGroup
+from ipaddress import IPv4Address, IPv4Network, summarize_address_range
+from ipaddress import AddressValueError, NetmaskValueError
+
+# Options
+
+# Args
+_parser = OptionParser("""
+Usage: %prog [-cr] <ip>
+
+also just typing an ip range or cidr works
+""".strip())
+# Help and verbose
+_parser.add_option('-v', action='store_true', dest='verbose', help="verbose")
+# IP Range, or CIDR
+ip_option_group = OptionGroup(_parser, "IP")
+ip_option_group.add_option('-c', '--cidr', dest='ip_cidr', action='store', type='string', metavar='127.0.0.0/24')
+ip_option_group.add_option('-r', '--range', dest='ip_range', action='store', type='string', metavar='127.0.0.0-127.0.0.255')
+_parser.add_option_group(ip_option_group)
+# Output
+output_option_group = OptionGroup(_parser, "Output")
+output_option_group.add_option('-o', '--output', dest='output', type='string', metavar='ips/cidr', default='ips')
+_parser.add_option_group(output_option_group)
+
+# Parsers
+
+def _print_error(message:str, *args, **kwargs):
+    _message = str.format(message, *args)
+    for _line in _message.splitlines():
+        print(f"[-] {_line}", file=stderr)
+
+
+def parse_ip_cidr(ip_cidr, output=None):
+    _ips = []
+    try:
+        _network = IPv4Network(ip_cidr, strict=False)
+        if _network.netmask < IPv4Address('255.255.0.0'):
+            _print_error(f"Warning, big netmask ({_network.netmask})")
+    except AddressValueError as invalid_ip_address:
+        _print_error("invalid ip address")
+        exit(1)
+    except NetmaskValueError as invalid_net_mask:
+        _print_error("invalid net mask")
+        exit(1)
+    # Output format
+    if output == 'ips':
+        _ips = list(map(lambda _ipv4: str(_ipv4), _network))
+    if output == 'cidr':
+        _ips = [str(_network)]
+    return _ips
+
+def parse_ip_range(ip_range, output=None):
+    # Split
+    try:
+        _start_ip, _end_ip = str(ip_range).split('-')
+    except ValueError as invalid_number_of_octets:
+        _print_error("range should be in the format 0.0.0.0-0.0.0.0")
+        exit(1)
+    # Range
+    try:
+        _start_ip = IPv4Address(_start_ip)
+        _end_ip = IPv4Address(_end_ip)
+    except AddressValueError as invalid_ip_address:
+        _print_error("invalid ip address")
+        exit(1)
+    # Get address range
+    _ip_cidrs = summarize_address_range(_start_ip, _end_ip)
+    # Convert CIDR to ips
+    _ips = []
+    try:
+        for _ip_cidr in _ip_cidrs:
+            _ips += parse_ip_cidr(_ip_cidr, output=output)
+    except ValueError as ip_range_is_inverted:
+        _print_error("first ip must be lower than last ip.")
+    # Return
+    return _ips
+
+# Main
+
+def _main():
+    # Parse
+    (values, args) = _parser.parse_args()
+    if 1 < len(args):
+        _print_error("too many arguments")
+    # Verbose
+    verbose  = values.verbose
+    # IPs
+    ip_cidr  = values.ip_cidr
+    ip_range = values.ip_range
+    # Output
+    output = values.output
+    # Check output type
+    if str(output).startswith('='):
+        output = output[1:]
+    if output not in ['ips', 'cidr']:
+        _print_error("output type is invalid, must be ips or cidr")
+        exit(1)
+    # Guess the IP type
+    if ip_cidr is None and ip_range is None:
+        if 0 < len(args):
+            _ip = args[0]
+            # Check CIDR
+            if '/' in _ip:
+                ip_cidr = _ip
+            if '-' in _ip:
+                ip_range = _ip
+    # Check IP type
+    _ips = None
+    if ip_range == None and ip_cidr == None:
+        _parser.print_help()
+    elif ip_range != None and ip_cidr != None:
+        _print_error("-c and -r are mutually exclusive") 
+    elif isinstance(ip_cidr, str):
+        _ips = parse_ip_cidr(ip_cidr, output=output)
+    elif isinstance(ip_range, str):
+        _ips = parse_ip_range(ip_range, output=output)
+    else:
+        _print_error("Something has gone wrong!")
+    # Print
+    if isinstance(_ips, list):
+        print('\n'.join(_ips))
+    # Done 
+    exit(0)
+
+
+if __name__ == '__main__':
+    try:
+        _main()
+    except KeyboardInterrupt:
+        _print_error("\rProgram was interrupted")
+        exit(0xFF)
+
